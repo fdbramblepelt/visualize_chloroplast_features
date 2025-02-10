@@ -53,6 +53,9 @@ def parse_gff3_file(file_path, sequence_id):
     print(f"Total features detected: {len(features)}")  # Debug statement
     return features
 
+
+
+
 def parse_regions_file(region_file_path, sequence_id):
     """
     Parse the regions file to extract region sizes (LSC, SSC, IRs) for a specific sequence ID.
@@ -92,6 +95,9 @@ def parse_regions_file(region_file_path, sequence_id):
     
     return regions
 
+
+
+
 def calculate_region_positions(regions):
     """
     Calculate the start and end positions for each region based on the parsed region lengths.
@@ -113,6 +119,10 @@ def calculate_region_positions(regions):
         "SSC": (ssc_start, ssc_end),
         "IRb": (irb_start, irb_end)
     }
+
+
+
+
 
 def organize_features(features, regions):
     """
@@ -144,6 +154,8 @@ def organize_features(features, regions):
 
     return regions, genes, tRNAs
 
+
+####### COLOR GENES BY FUNCTION #######
 def load_gene_colors():
     df = pd.read_csv("/Users/fdbramblepelt/Desktop/Lab/Hairpin_Chloroplast/Chloroplast_Vis/visualize_chloroplast_features/chloroplast_gene.csv")
     return {row['gene']: row['hex_code'].strip() for _, row in df.iterrows()}
@@ -161,6 +173,8 @@ def get_gene_color(gene_name, color_map):
         elif gene_name.lower() in ref_gene.lower() or ref_gene.lower() in gene_name.lower():
             return color
     return "#808080"  # Default gray color for unmatched genes
+
+##########################
 
 def parse_hairpin_csv(file_path, regions, sequence_id):
     """
@@ -212,6 +226,8 @@ def parse_hairpin_csv(file_path, regions, sequence_id):
             })
     return hairpins
 
+##########################
+
 def reverse_genes_for_irb(ira_genes, ir_length):
     """
     Reverse the gene positions for IRb based on IRa genes.
@@ -224,6 +240,8 @@ def reverse_genes_for_irb(ira_genes, ir_length):
         irb_genes.append((gene_name, (new_start, new_end)))
     return irb_genes
 
+##########################
+
 def draw_genome_regions(ax, regions, region_colors):
     """
     Draw rectangles for genome regions on the plot.
@@ -234,6 +252,8 @@ def draw_genome_regions(ax, regions, region_colors):
         color = region_colors.get(region_name, "#ffffff")  # Default to white if not found
         print(f"Drawing {region_name} from {start} to {end} with color {color}")  # Debugging output
         ax.add_patch(plt.Rectangle((start, -0.5), end - start, 1, color=color, alpha=0.8))
+
+##########################
 
 def plot_genome(regions, genes, tRNAs, hairpins, genome_length):
     """
@@ -407,6 +427,9 @@ def plot_genome(regions, genes, tRNAs, hairpins, genome_length):
     plt.tight_layout()
     plt.show()
 
+
+##########################
+
 def filter_by_sequence_id(data, sequence_id):
     """
     Filter data by sequence ID, allowing partial and case-insensitive matches.
@@ -414,6 +437,8 @@ def filter_by_sequence_id(data, sequence_id):
     sequence_id_lower = sequence_id.lower()
     return [item for item in data if sequence_id_lower in item['sequence_id'].lower()]
 
+
+##########################
 
 def main(sequence_id, region_file=None, gff3_file=None, hairpin_file=None):
     """
