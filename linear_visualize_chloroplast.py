@@ -14,57 +14,52 @@ import pandas as pd
 import csv
 import argparse
 
-def parse_gff3_file(file_path):
+def parse_gff3_file(file_path, sequence_id):
     """
-    Parse the GFF3 file to extract genome features (genes, regions, etc.).
+    Parse the GFF3 file to extract gene features for a specific sequence ID.
     """
     features = []
     with open(file_path, 'r') as file:
         for line in file:
-            if line.startswith("#") or not line.strip():
-                continue  # Skip comments and empty lines
-            parts = line.strip().split("\t")
-            if len(parts) < 9:
-                continue  # Skip malformed lines
-            
-            start = parts[3]
-            end = parts[4]
+            if line.startswith('#'):
+                continue  # Skip comment lines
 
-            # Skip entries with 'NA' in start or end
-            if start == 'NA' or end == 'NA':
-                continue
+            parts = line.strip().split(',')
+            if len(parts) != 9:
+                continue  # Skip malformed lines
+
+            seq_id, source, feature_type, start, end, score, strand, phase, attributes = parts
+
+            # Check if the line corresponds to the requested sequence ID
+            if not seq_id.lower().startswith(sequence_id.lower()):
+                continue  # Skip lines that don't match the sequence ID
+
+            # Parse attributes
+            attr_dict = {}
+            for attr in attributes.split(';'):
+                key, value = attr.split('=')
+                attr_dict[key] = value
 
             feature = {
-                "seqid": parts[0],
-                "source": parts[1],
-                "type": parts[2],
+                "type": feature_type,
                 "start": int(start),
                 "end": int(end),
-                "score": parts[5],
-                "strand": parts[6],
-                "phase": parts[7],
-                "attributes": {}
+                "strand": strand,
+                "attributes": attr_dict
             }
-            
-            # Parse attributes
-            attributes_str = parts[8]
-            for attr in attributes_str.split(";"):
-                if attr:
-                    key_value = attr.split("=")
-                    if len(key_value) == 2:
-                        key = key_value[0].strip()
-                        value = key_value[1].strip()
-                        feature["attributes"][key] = value
-            
             features.append(feature)
-    
+            print(f"Detected feature: {feature}")  # Debug statement
+
+    print(f"Total features detected: {len(features)}")  # Debug statement
     return features
 
-def parse_regions_file(region_file_path):
+def parse_regions_file(region_file_path, sequence_id):
     """
-    Parse the regions file to extract region sizes (LSC, SSC, IRs).
+    Parse the regions file to extract region sizes (LSC, SSC, IRs) for a specific sequence ID.
     """
     regions = {"LSC": None, "SSC": None, "IR": []}
+    seen_ir = set()  # To track already seen IR regions
+
     with open(region_file_path, 'r') as file:
         for line in file:
             if line.startswith("#") or not line.strip():
@@ -72,6 +67,10 @@ def parse_regions_file(region_file_path):
             parts = line.strip().split("\t")
             if len(parts) < 5:
                 continue  # Skip malformed lines
+            
+            # Check if the line corresponds to the requested sequence ID
+            if not parts[0].startswith(sequence_id):
+                continue  # Skip lines that don't match the sequence ID
             
             region_type = parts[2].lower()
             start = int(parts[3])
@@ -82,9 +81,38 @@ def parse_regions_file(region_file_path):
             elif region_type == "ssc":
                 regions["SSC"] = (start, end)
             elif region_type in ["ira", "irb"]:
-                regions["IR"].append((start, end))
+                # Only add unique IR regions
+                ir_key = (start, end)
+                if ir_key not in seen_ir:
+                    seen_ir.add(ir_key)
+                    regions["IR"].append(ir_key)
+    
+    # Debug output
+    print(f"Parsed regions for {sequence_id}: {regions}")
     
     return regions
+
+def calculate_region_positions(regions):
+    """
+    Calculate the start and end positions for each region based on the parsed region lengths.
+    """
+    lsc_start, lsc_end = regions["LSC"]
+    ir_length = regions["IR"][0][1] - regions["IR"][0][0]  # Assuming both IRa and IRb have the same length
+    ssc_length = regions["SSC"][1] - regions["SSC"][0]
+
+    ira_start = lsc_end + 1
+    ira_end = ira_start + ir_length - 1
+    ssc_start = ira_end + 1
+    ssc_end = ssc_start + ssc_length - 1
+    irb_start = ssc_end + 1
+    irb_end = irb_start + ir_length - 1
+
+    return {
+        "LSC": (lsc_start, lsc_end),
+        "IRa": (ira_start, ira_end),
+        "SSC": (ssc_start, ssc_end),
+        "IRb": (irb_start, irb_end)
+    }
 
 def organize_features(features, regions):
     """
@@ -96,6 +124,7 @@ def organize_features(features, regions):
     # Process genes and tRNAs as before
     for feature in features:
         if feature['type'] == "gene":
+            print(f"Gene: {feature}")
             genes.append({
                 "name": feature['attributes'].get("Name", "Unknown"),
                 "start": feature['start'],
@@ -104,6 +133,7 @@ def organize_features(features, regions):
                 "strand": feature['strand']
             })
         elif feature['type'] == "tRNA":
+            print(f"tRNA: {feature}")
             tRNAs.append({
                 "name": feature['attributes'].get("Name", "Unknown"),
                 "id": feature['attributes'].get("ID", "Unknown"),
@@ -115,7 +145,7 @@ def organize_features(features, regions):
     return regions, genes, tRNAs
 
 def load_gene_colors():
-    df = pd.read_csv("/Users/fdbramblepelt/Desktop/Lab/Hairpin_Chloroplast/Chloroplast_Vis/chloroplast_gene.csv")
+    df = pd.read_csv("/Users/fdbramblepelt/Desktop/Lab/Hairpin_Chloroplast/Chloroplast_Vis/visualize_chloroplast_features/chloroplast_gene.csv")
     return {row['gene']: row['hex_code'].strip() for _, row in df.iterrows()}
 
 def get_gene_color(gene_name, color_map):
@@ -132,14 +162,18 @@ def get_gene_color(gene_name, color_map):
             return color
     return "#808080"  # Default gray color for unmatched genes
 
-def parse_hairpin_csv(file_path, regions):
+def parse_hairpin_csv(file_path, regions, sequence_id):
     """
-    Parse the hairpin CSV file to extract hairpin features.
+    Parse the hairpin CSV file to extract hairpin features for a specific sequence ID.
     """
     hairpins = []
     with open(file_path, 'r') as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
+            # Check if the row corresponds to the requested sequence ID
+            if not row['sequence_id'].lower().startswith(sequence_id.lower()):
+                continue  # Skip rows that don't match the sequence ID
+
             # Skip rows with 'NA' in start_pos or end_pos
             if row['start_pos'] == 'NA' or row['end_pos'] == 'NA':
                 continue
@@ -156,8 +190,8 @@ def parse_hairpin_csv(file_path, regions):
                 start_pos += regions['SSC'][0] - 1
                 end_pos += regions['SSC'][0] - 1
             elif region == 'irb':
-                start_pos += regions['IR'][1][0] - 1
-                end_pos += regions['IR'][1][0] - 1
+                start_pos += regions['IRb'][0] - 1
+                end_pos += regions['IRb'][0] - 1
             
             hairpins.append({
                 "id": row['ID'],
@@ -178,7 +212,29 @@ def parse_hairpin_csv(file_path, regions):
             })
     return hairpins
 
-# Step 3: Plot the genome
+def reverse_genes_for_irb(ira_genes, ir_length):
+    """
+    Reverse the gene positions for IRb based on IRa genes.
+    """
+    irb_genes = []
+    for gene in ira_genes:
+        gene_name, (start, end) = gene
+        new_start = ir_length - end + 1
+        new_end = ir_length - start + 1
+        irb_genes.append((gene_name, (new_start, new_end)))
+    return irb_genes
+
+def draw_genome_regions(ax, regions, region_colors):
+    """
+    Draw rectangles for genome regions on the plot.
+    """
+    ordered_regions = ['LSC', 'IRa', 'SSC', 'IRb']
+    for region_name in ordered_regions:
+        start, end = regions.get(region_name, (0, 0))
+        color = region_colors.get(region_name, "#ffffff")  # Default to white if not found
+        print(f"Drawing {region_name} from {start} to {end} with color {color}")  # Debugging output
+        ax.add_patch(plt.Rectangle((start, -0.5), end - start, 1, color=color, alpha=0.8))
+
 def plot_genome(regions, genes, tRNAs, hairpins, genome_length):
     """
     Create a linear plot of the chloroplast genome including hairpins.
@@ -191,17 +247,22 @@ def plot_genome(regions, genes, tRNAs, hairpins, genome_length):
     # Load gene colors from CSV
     gene_colors = load_gene_colors()
     
-    # Plot regions (LSC, SSC, IRs)
-    ax.add_patch(Rectangle((regions["LSC"][0], -0.5), regions["LSC"][1] - regions["LSC"][0], 1, color="lightgrey", alpha=0.5, label="LSC"))
-    ax.add_patch(Rectangle((regions["SSC"][0], -0.5), regions["SSC"][1] - regions["SSC"][0], 1, color="lightgrey", alpha=0.5, label="SSC"))
-    for i, ir in enumerate(regions["IR"]):
-        label = "IR" if i == 0 else ""
-        ax.add_patch(Rectangle((ir[0], -0.5), ir[1] - ir[0], 1, color="lightgrey", alpha=0.5, label=label))
-
+    # Define colors for genome regions
+    region_colors = {
+        "LSC": "#f5d893",
+        "SSC": "#e8b26f",
+        "IRa": "#b6834c",
+        "IRb": "#b6834c"
+    }
+    
+    # Draw genome regions
+    draw_genome_regions(ax, regions, region_colors)
+    
     count_pos = 0
     count_neg = 0
-    # Plot genes with simplified labeling
+    # Plot genes
     for gene in genes:
+        print(f"Gene: {gene}")
         if gene['start'] < gene['end'] and gene['start'] >= 0 and gene['end'] <= genome_length:
             y_pos = 0.6 if gene['strand'] == '+' else 0
             height = 0.4
@@ -215,37 +276,14 @@ def plot_genome(regions, genes, tRNAs, hairpins, genome_length):
             if (gene["end"] - gene["start"]) > 50:  # Only label genes above minimum size
                 display_name = gene["id"] if gene["name"] == "Unknown" else gene["name"]
                 text_y = 1.2 if gene['strand'] == '+' else -0.2
-                y_change = 0.12 if gene['strand'] == '+' else -0.12
-
-                if gene['strand'] == '+':
-                    count_pos += 1
-                else:
-                    count_neg += 1
-
-                if count_pos == 2:
-                    text_y = text_y + y_change
-                elif count_neg == 2:
-                    text_y = text_y - y_change
-                
-                if count_pos == 3:
-                    text_y = text_y + (y_change * 2)
-                    count_pos = 0
-                elif count_neg == 3:
-                    text_y = text_y - (y_change * 2)
-                    count_neg = 0
-
-
-                # Draw a line from gene to label
-                mid_x = (gene["start"] + gene["end"]) / 2
-                ax.plot([mid_x, mid_x], [y_pos + height/2, text_y], linewidth=0.5, color=color)
-                
-                ax.text(mid_x, text_y, display_name, 
+                ax.text((gene["start"] + gene["end"]) / 2, text_y, display_name, 
                        ha="center", va="center", fontsize=8, color=color,
                        rotation=30 if gene['strand'] == '+' else -20)
 
     # Plot tRNAs with simplified labeling
     for tRNA in tRNAs:
         # Check if a gene exists with the same start and end position
+        print(f"tRNA: {tRNA}")
         gene_exists = any(gene['start'] == tRNA['start'] and gene['end'] == tRNA['end'] for gene in genes)
         
         if not gene_exists and tRNA['start'] < tRNA['end'] and tRNA['start'] >= 0 and tRNA['end'] <= genome_length:
@@ -281,6 +319,7 @@ def plot_genome(regions, genes, tRNAs, hairpins, genome_length):
 
     # Plot hairpins
     for index, hairpin in enumerate(hairpins, start=1):
+        #print(f"Hairpin: {hairpin}")
         y_center = 0.45
         height = 0.65
         ax.add_patch(Rectangle((hairpin["start"], y_center - height / 2), hairpin["end"] - hairpin["start"], height + 0.2, 
@@ -301,10 +340,10 @@ def plot_genome(regions, genes, tRNAs, hairpins, genome_length):
     # Add genome summary text
     summary_text = [
         f"LSC: {regions['LSC'][0]} - {regions['LSC'][1]} ({regions['LSC'][1] - regions['LSC'][0]} bp)",
-        f"SSC: {regions['SSC'][0]} - {regions['SSC'][1]} ({regions['SSC'][1] - regions['SSC'][0]} bp)"
+        f"SSC: {regions['SSC'][0]} - {regions['SSC'][1]} ({regions['SSC'][1] - regions['SSC'][0]} bp)",
+        f"IRa: {regions['IRa'][0]} - {regions['IRa'][1]} ({regions['IRa'][1] - regions['IRa'][0]} bp)",
+        f"IRb: {regions['IRb'][0]} - {regions['IRb'][1]} ({regions['IRb'][1] - regions['IRb'][0]} bp)"
     ]
-    for i, ir in enumerate(regions["IR"]):
-        summary_text.append(f"IR{i+1}: {ir[0]} - {ir[1]} ({ir[1] - ir[0]} bp)")
     num_hairpins = len(hairpins)  # Define num_hairpins as the length of the hairpins list
     summary_text.extend([
         f"Total Genes: {len(genes)}",
@@ -354,25 +393,10 @@ def plot_genome(regions, genes, tRNAs, hairpins, genome_length):
     ax.set_xlabel("Genome Position (bp)")
     ax.set_yticks([])
     ax.legend(handles=legend_elements, loc='upper right', bbox_to_anchor=(1, 1), fontsize=8, ncol=5)
-    # Define colors for genome regions
-    region_colors = {
-        "LSC": "#f5d893",
-        "SSC": "#e8b26f",
-        "IRa": "#b6834c",
-        "IRb": "#b6834c"
-    }
-
-    # Create legend handles for region-color pairs
-    region_legend_elements = [plt.Line2D([0], [0], marker='o', color='w', label=region,
-                                         markerfacecolor=color, markersize=10)
-                              for region, color in region_colors.items()]
-
-    # Add legend for gene colors to the plot
-    ax.legend(handles=region_legend_elements + legend_elements, loc='upper right', bbox_to_anchor=(1, 1), fontsize=8, ncol=5)
-
 
     # Set the title and subtitle using the first hairpin's metadata
     if hairpins:
+        #print(f"Hairpins: {hairpins}")
         first_hairpin = hairpins[0]
         title = f"{first_hairpin['genus']} {first_hairpin['species']} ({first_hairpin['sequence_id']})"
         subtitle = f"{first_hairpin['major_clade']} | {first_hairpin['subfamily']} | {first_hairpin['tribe']} | {first_hairpin['subtribe']}. " \
@@ -390,37 +414,44 @@ def filter_by_sequence_id(data, sequence_id):
     sequence_id_lower = sequence_id.lower()
     return [item for item in data if sequence_id_lower in item['sequence_id'].lower()]
 
+
 def main(sequence_id, region_file=None, gff3_file=None, hairpin_file=None):
     """
     Main function to load, parse, and visualize the genome.
     """
     # Use default files if not provided
     if not region_file:
-        region_file = "/Users/fdbramblepelt/Desktop/Lab/Hairpin_Chloroplast/Chloroplast_Vis/all.filtered_chloroplast_genome_region_lengths.gff3"
+        region_file = "/Users/fdbramblepelt/Desktop/Lab/Hairpin_Chloroplast/Chloroplast_Vis/visualize_chloroplast_features/all.filtered_chloroplast_genome_region_lengths.gff3"
     if not gff3_file:
-        gff3_file = "/Users/fdbramblepelt/Desktop/Lab/Hairpin_Chloroplast/Chloroplast_Vis/Sorghum_bicolor/Sorghum.bicolor.all_hairpins.csv"
+        gff3_file = "/Users/fdbramblepelt/Desktop/Lab/Hairpin_Chloroplast/gff3/file_bin/GFF3_genes_complete_genbank.csv"
     if not hairpin_file:
-        hairpin_file = "/Users/fdbramblepelt/Desktop/Lab/Hairpin_Chloroplast/Chloroplast_Vis/Sorghum_bicolor/Sorghum.bicolor.all_hairpins.csv"
+        hairpin_file = "/Users/fdbramblepelt/Desktop/Lab/Hairpin_Chloroplast/Chloroplast_Vis/visualize_chloroplast_features/trimmed_data.all_hairpins.csv"
 
     # Parse the regions file
-    regions = parse_regions_file(region_file)
+    regions = parse_regions_file(region_file, sequence_id)
+
+    # Calculate genome length
+    genome_length = regions["LSC"][1] + regions["SSC"][1] + 2 * (regions["IR"][0][1] - regions["IR"][0][0])
+
+    # Calculate region positions
+    regions = calculate_region_positions(regions)
+
+    # Debug output
+    print(f"Regions after parsing: {regions}")
 
     # Parse the GFF3 file and filter by sequence ID
-    features = parse_gff3_file(gff3_file)
-    features = filter_by_sequence_id(features, sequence_id)
+    features = parse_gff3_file(gff3_file, sequence_id)
+    #features = filter_by_sequence_id(features, sequence_id)
 
     # Organize features into regions, genes, and tRNAs
     regions, genes, tRNAs = organize_features(features, regions)
 
     # Parse the hairpin file and filter by sequence ID
-    hairpins = parse_hairpin_csv(hairpin_file, regions)
+    hairpins = parse_hairpin_csv(hairpin_file, regions, sequence_id)
     hairpins = filter_by_sequence_id(hairpins, sequence_id)
 
-    # Calculate genome length
-    lsc_length = regions["LSC"][1] - regions["LSC"][0]
-    ssc_length = regions["SSC"][1] - regions["SSC"][0]
-    ir_length = sum(ir[1] - ir[0] for ir in regions["IR"])
-    genome_length = lsc_length + ssc_length + ir_length
+    # Debug output
+    print(f"Calculated genome length: {genome_length}")
 
     # Plot the genome
     plot_genome(regions, genes, tRNAs, hairpins, genome_length)
